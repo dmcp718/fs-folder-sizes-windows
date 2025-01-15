@@ -87,3 +87,19 @@ Note: This version is specifically optimized for Windows. For macOS, see the [ma
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Performance Tips
+
+-   **Worker Threads:** The scanner uses multiple threads for parallel processing
+    -   Default is 16 workers for optimal performance
+    -   Network shares: Try 16-32 workers
+    -   Local SSDs: 8-16 workers usually optimal
+    -   HDDs: 4-8 workers may work better
+    -   Adjust using `--workers N` option
+
+-   **Example Performance:**
+    ```
+    16 workers: ~16,000 entries/sec
+    8 workers:  ~7,400 entries/sec
+    4 workers:  ~6,000 entries/sec
+    ```

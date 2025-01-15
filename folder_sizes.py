@@ -84,7 +84,7 @@ class FolderScanner:
     def __init__(self, mount_point: str, include_hidden: bool = False, max_workers: int = None, top_level: bool = False):
         self.root = Path(mount_point).resolve()  # Use resolved path for Windows
         self.include_hidden = include_hidden
-        self.max_workers = max_workers or 8
+        self.max_workers = max_workers if max_workers is not None else min(32, (os.cpu_count() or 8) * 2)
         self.top_level = top_level
         self.stats = ScanStats()
         self.folder_sizes: Dict[str, int] = defaultdict(int)
@@ -298,8 +298,8 @@ Examples:
                        help='Output CSV file path (default: folder_sizes.csv)')
     parser.add_argument('--include-hidden', action='store_true',
                        help='Include hidden files and folders')
-    parser.add_argument('--workers', type=int, default=8,
-                       help='Number of worker threads (default: 8)')
+    parser.add_argument('--workers', type=int, default=16,
+                       help='Number of worker threads (default: 16)')
     parser.add_argument('--top-level', action='store_true',
                        help='Only report sizes for top-level directories')
     args = parser.parse_args()
