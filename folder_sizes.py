@@ -4,7 +4,7 @@
 Folder Size Scanner - A high-performance directory size analyzer for Windows
 
 Usage:
-    folder_sizes.py --mount-point C:\path\to\scan [options]
+    folder_sizes.py --mount-point C:/path/to/scan [options]
 
 Options:
     --mount-point PATH    Root directory path to scan (required)
@@ -15,16 +15,16 @@ Options:
 
 Examples:
     # Basic scan of a directory
-    folder_sizes.py --mount-point C:\Users\username\Documents
+    folder_sizes.py --mount-point C:/Users/username/Documents
 
     # Scan with custom output file
-    folder_sizes.py --mount-point D:\Data --output sizes.csv
+    folder_sizes.py --mount-point D:/Data --output sizes.csv
 
     # Include hidden files and use 16 worker threads
-    folder_sizes.py --mount-point E:\Backups --include-hidden --workers 16
+    folder_sizes.py --mount-point E:/Backups --include-hidden --workers 16
 
     # Only show top-level directory sizes
-    folder_sizes.py --mount-point C:\Data --top-level
+    folder_sizes.py --mount-point C:/Data --top-level
 """
 
 import os
@@ -40,6 +40,7 @@ from queue import Queue, Empty
 from collections import defaultdict
 import stat
 import ctypes
+import sys
 
 @dataclass
 class ScanStats:
@@ -80,6 +81,20 @@ class BatchCounter:
         self.dirs += dirs
         self.size += size
 
+def safe_print(message: str, end='\n', file=None, flush=False):
+    """Print text safely handling Unicode characters."""
+    try:
+        print(message, end=end, file=file, flush=flush)
+    except UnicodeEncodeError:
+        if file is None:
+            file = sys.stdout
+        buffer = file.buffer if hasattr(file, 'buffer') else file
+        buffer.write(message.encode('utf-8', errors='replace'))
+        if end:
+            buffer.write(end.encode('utf-8'))
+        if flush:
+            buffer.flush()
+
 class FolderScanner:
     def __init__(self, mount_point: str, include_hidden: bool = False, max_workers: int = None, top_level: bool = False):
         self.root = Path(mount_point).resolve()  # Use resolved path for Windows
@@ -119,25 +134,43 @@ class FolderScanner:
                 continue
 
             try:
-                with os.scandir(directory) as entries:
+                # Use raw string for Windows path
+                raw_dir = str(directory)
+                try:
+                    entries = os.scandir(raw_dir)
+                except OSError as e:
+                    safe_print(f"Error accessing directory {raw_dir}: {e}")
+                    self.work_queue.task_done()
+                    continue
+
+                with entries:
                     dir_size = 0
                     subdirs = []
 
                     for entry in entries:
-                        if self._should_skip(entry.name):
-                            continue
-                        
                         try:
-                            if entry.is_file(follow_symlinks=False):
-                                size = entry.stat().st_size
-                                dir_size += size
-                                local_counter.update(files=1, size=size)
-                            elif entry.is_dir(follow_symlinks=False):
-                                subdirs.append(entry.path)
-                        except PermissionError:
-                            print(f"Access denied: {entry.path}")
-                        except OSError as e:
-                            print(f"Windows error accessing {entry.path}: {e}")
+                            # Get the raw entry path
+                            entry_path = entry.path
+                            
+                            if self._should_skip(entry.name):
+                                continue
+                            
+                            try:
+                                if entry.is_file(follow_symlinks=False):
+                                    try:
+                                        size = entry.stat().st_size
+                                        dir_size += size
+                                        local_counter.update(files=1, size=size)
+                                    except OSError as e:
+                                        safe_print(f"Error getting size for {entry_path}: {e}")
+                                elif entry.is_dir(follow_symlinks=False):
+                                    subdirs.append(entry_path)
+                            except OSError as e:
+                                safe_print(f"Error accessing {entry_path}: {e}")
+                                continue
+                        except Exception as e:
+                            safe_print(f"Unexpected error processing {entry.path}: {e}")
+                            continue
 
                     # Process directories
                     for subdir in subdirs:
@@ -147,8 +180,8 @@ class FolderScanner:
                                 self.processed_dirs.add(subdir)
                                 local_counter.update(dirs=1)
 
-                    # Store directory size
-                    local_sizes[str(directory)] = dir_size
+                    # Store directory size using raw path
+                    local_sizes[raw_dir] = dir_size
 
                     # Update global stats periodically
                     if local_counter.files >= 1000:
@@ -161,8 +194,8 @@ class FolderScanner:
                         local_counter = BatchCounter()
                         local_sizes.clear()
 
-            except (PermissionError, OSError) as e:
-                print(f"Error scanning directory {directory}: {e}")
+            except Exception as e:
+                safe_print(f"Error processing directory {directory}: {e}")
             finally:
                 self.work_queue.task_done()
 
@@ -199,12 +232,12 @@ class FolderScanner:
             while any(w.is_alive() for w in workers):
                 current_files = self.stats.total_files
                 if current_files != last_files:
-                    print(f"Processed {current_files:,} files...", end='\r', flush=True)
+                    safe_print(f"Processed {current_files:,} files...", end='\r', flush=True)
                     last_files = current_files
                 time.sleep(0.5)
 
         except KeyboardInterrupt:
-            print("\nStopping scan gracefully (this may take a moment)...")
+            safe_print("\nStopping scan gracefully (this may take a moment)...")
             self._running.clear()
             
             # Clear the queue to prevent workers from processing more items
@@ -219,7 +252,7 @@ class FolderScanner:
             for w in workers:
                 w.join(timeout=1.0)
             
-            print("Scan stopped.")
+            safe_print("Scan stopped.")
             self.stats.end_time = time.time()
             return
 
@@ -237,7 +270,7 @@ class FolderScanner:
             for w in workers:
                 w.join(timeout=0.5)
 
-        print("\nCalculating directory sizes...")
+        safe_print("\nCalculating directory sizes...")
         # Calculate cumulative directory sizes
         for path in sorted(self.folder_sizes.keys(), key=len, reverse=True):
             parent = str(Path(path).parent)
@@ -248,36 +281,61 @@ class FolderScanner:
 
     def write_folder_sizes_report(self, output_file: str) -> None:
         """Write folder sizes to CSV file."""
-        with open(output_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Folder Path', 'Size'])
-            
-            # Get sorted items
-            items = sorted(self.folder_sizes.items())
-            
-            # Filter for top-level if requested
-            if self.top_level:
-                root_str = str(self.root)
-                items = [(p, s) for p, s in items if 
-                        p == root_str or  # Include root
-                        Path(p).parent == self.root]  # Include direct children
-            
-            # Write to CSV
-            for path, size in items:
-                if path == str(self.root):
-                    rel_path = '\\'
-                else:
-                    rel_path = str(Path(path).relative_to(self.root)).replace('/', '\\')
-                writer.writerow([rel_path, human_readable_size(size)])
+        try:
+            # Open file with UTF-8 encoding and BOM for Windows compatibility
+            with open(output_file, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Folder Path', 'Size'])
+                
+                # Get sorted items
+                items = sorted(self.folder_sizes.items())
+                
+                # Filter for top-level if requested
+                if self.top_level:
+                    root_str = str(self.root)
+                    items = [(p, s) for p, s in items if 
+                            p == root_str or  # Include root
+                            Path(p).parent == self.root]  # Include direct children
+                
+                # Write to CSV, handling potential encoding errors
+                for path, size in items:
+                    try:
+                        if path == str(self.root):
+                            rel_path = '\\'
+                        else:
+                            rel_path = str(Path(path).relative_to(self.root)).replace('/', '\\')
+                        writer.writerow([rel_path, human_readable_size(size)])
+                    except UnicodeEncodeError:
+                        # Replace problematic characters
+                        sanitized_path = rel_path.encode('ascii', 'replace').decode('ascii')
+                        writer.writerow([sanitized_path, human_readable_size(size)])
+                        # Use sys.stderr.buffer to write bytes directly
+                        warning = f"Warning: Path contains unsupported characters, sanitized: {sanitized_path}\n"
+                        sys.stderr.buffer.write(warning.encode('utf-8'))
+                        sys.stderr.buffer.flush()
+        except Exception as e:
+            # Fallback to ASCII-only output if all else fails
+            with open(output_file, 'w', newline='', encoding='ascii', errors='replace') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Folder Path', 'Size'])
+                for path, size in items:
+                    if path == str(self.root):
+                        rel_path = '\\'
+                    else:
+                        rel_path = str(Path(path).relative_to(self.root)).replace('/', '\\')
+                    # Force ASCII encoding with replacement characters
+                    safe_path = rel_path.encode('ascii', 'replace').decode('ascii')
+                    writer.writerow([safe_path, human_readable_size(size)])
+            print("Warning: Some characters were replaced due to encoding issues", file=sys.stderr)
 
     def print_summary(self) -> None:
         """Print scan summary to console."""
-        print("\nScan Summary:")
-        print(f"Total Files: {self.stats.total_files:,}")
-        print(f"Total Directories: {self.stats.total_dirs:,}")
-        print(f"Total Size: {human_readable_size(self.stats.total_size)}")
-        print(f"Scan Time: {self.stats.duration:.2f} seconds")
-        print(f"Scan Rate: {self.stats.scan_rate:.2f} entries/sec")
+        safe_print("\nScan Summary:")
+        safe_print(f"Total Files: {self.stats.total_files:,}")
+        safe_print(f"Total Directories: {self.stats.total_dirs:,}")
+        safe_print(f"Total Size: {human_readable_size(self.stats.total_size)}")
+        safe_print(f"Scan Time: {self.stats.duration:.2f} seconds")
+        safe_print(f"Scan Rate: {self.stats.scan_rate:.2f} entries/sec")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -292,10 +350,20 @@ Examples:
     folder_sizes.py --mount-point D:\\Data --include-hidden --workers 16
         """)
     
+    # Get the executable's directory
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        # Running as script
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    default_output = os.path.join(app_dir, 'folder_sizes.csv')
+    
     parser.add_argument('--mount-point', required=True, 
                        help='Root path to scan')
-    parser.add_argument('--output', default='folder_sizes.csv',
-                       help='Output CSV file path (default: folder_sizes.csv)')
+    parser.add_argument('--output', default=default_output,
+                       help=f'Output CSV file path (default: {os.path.basename(default_output)})')
     parser.add_argument('--include-hidden', action='store_true',
                        help='Include hidden files and folders')
     parser.add_argument('--workers', type=int, default=16,
@@ -311,24 +379,24 @@ Examples:
         top_level=args.top_level
     )
 
-    print("\n")
-    print(f"Starting scan of {args.mount_point}")
+    safe_print("\n")
+    safe_print(f"Starting scan of {args.mount_point}")
     
     try:
         scanner.scan()
         scanner.print_summary()
         scanner.write_folder_sizes_report(args.output)
-        print(f"\nFolder sizes report written to: {args.output}")
+        safe_print(f"\nFolder sizes report written to: {args.output}")
     except KeyboardInterrupt:
-        print("\nScan interrupted. Writing partial results...")
+        safe_print("\nScan interrupted. Writing partial results...", file=sys.stderr)
         try:
             scanner.print_summary()
             scanner.write_folder_sizes_report(args.output)
-            print(f"\nPartial results written to: {args.output}")
+            safe_print(f"\nPartial results written to: {args.output}")
         except Exception as e:
-            print(f"Error writing results: {e}")
+            safe_print(f"Error writing results: {str(e)}", file=sys.stderr)
     finally:
-        print("")
+        safe_print("")
 
 if __name__ == '__main__':
     main()
