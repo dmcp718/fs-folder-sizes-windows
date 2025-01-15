@@ -1,0 +1,5 @@
+# Runtime dependencies
+# None - only standard library modules used
+
+# Development dependencies
+pyinstaller>=6.0.0  # For building standalone executable
