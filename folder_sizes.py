@@ -11,6 +11,7 @@ Options:
     --output FILE        Output CSV file path (default: folder_sizes.csv)
     --include-hidden     Include hidden files and folders
     --workers N          Number of scanner threads (default: 8)
+    --top-level         Only report sizes for top-level directories
 
 Examples:
     # Basic scan of a directory
@@ -22,17 +23,8 @@ Examples:
     # Include hidden files and use 16 worker threads
     folder_sizes.py --mount-point E:\Backups --include-hidden --workers 16
 
-The scanner will:
-    1. Recursively scan the specified directory
-    2. Show progress during scan
-    3. Generate a CSV report with folder sizes
-    4. Print a summary of total files, directories, and sizes
-
-Output CSV format:
-    Folder Path, Size
-    \,          1.23 TB
-    \docs,      45.67 MB
-    \images,    234.56 GB
+    # Only show top-level directory sizes
+    folder_sizes.py --mount-point C:\Data --top-level
 """
 
 import os
@@ -89,10 +81,11 @@ class BatchCounter:
         self.size += size
 
 class FolderScanner:
-    def __init__(self, mount_point: str, include_hidden: bool = False, max_workers: int = None):
+    def __init__(self, mount_point: str, include_hidden: bool = False, max_workers: int = None, top_level: bool = False):
         self.root = Path(mount_point).resolve()  # Use resolved path for Windows
         self.include_hidden = include_hidden
         self.max_workers = max_workers or 8
+        self.top_level = top_level
         self.stats = ScanStats()
         self.folder_sizes: Dict[str, int] = defaultdict(int)
         self._stats_lock = threading.Lock()
@@ -258,8 +251,19 @@ class FolderScanner:
         with open(output_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['Folder Path', 'Size'])
-            for path, size in sorted(self.folder_sizes.items()):
-                # Use Windows path separator
+            
+            # Get sorted items
+            items = sorted(self.folder_sizes.items())
+            
+            # Filter for top-level if requested
+            if self.top_level:
+                root_str = str(self.root)
+                items = [(p, s) for p, s in items if 
+                        p == root_str or  # Include root
+                        Path(p).parent == self.root]  # Include direct children
+            
+            # Write to CSV
+            for path, size in items:
                 if path == str(self.root):
                     rel_path = '\\'
                 else:
@@ -296,12 +300,15 @@ Examples:
                        help='Include hidden files and folders')
     parser.add_argument('--workers', type=int, default=8,
                        help='Number of worker threads (default: 8)')
+    parser.add_argument('--top-level', action='store_true',
+                       help='Only report sizes for top-level directories')
     args = parser.parse_args()
 
     scanner = FolderScanner(
         args.mount_point,
         include_hidden=args.include_hidden,
-        max_workers=args.workers
+        max_workers=args.workers,
+        top_level=args.top_level
     )
 
     print("\n")

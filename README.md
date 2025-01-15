@@ -11,6 +11,7 @@ A high-performance directory size analyzer for Windows. This tool scans a specif
 -   **Handles Errors:** Gracefully handles permission errors and other issues during scanning.
 -   **Customizable:** Allows specifying the number of worker threads and whether to include hidden files.
 -   **Interruptible:** Supports graceful interruption via Ctrl+C, saving partial results.
+-   **Flexible Reports:** Option to show only top-level directory sizes for a concise overview.
 
 ## Usage
 
@@ -24,6 +25,7 @@ folder_sizes.py --mount-point C:\path\to\scan [options]
 -   `--output FILE`: Output CSV file path (default: `folder_sizes.csv`).
 -   `--include-hidden`: Include hidden files and folders.
 -   `--workers N`: Number of scanner threads (default: 8).
+-   `--top-level`: Only report sizes for top-level directories.
 
 ### Examples
 
@@ -36,7 +38,35 @@ folder_sizes.py --mount-point D:\Data --output sizes.csv
 
 # Include hidden files and use 16 worker threads
 folder_sizes.py --mount-point E:\Backups --include-hidden --workers 16
+
+# Only show top-level directory sizes
+folder_sizes.py --mount-point C:\Data --top-level
 ```
+
+## Output CSV Format
+
+The output CSV file contains the following columns:
+
+-   `Folder Path`: The path of the folder relative to the mount point.
+-   `Size`: The total size of the folder in a human-readable format.
+
+Example:
+```csv
+Folder Path, Size
+\,          7.91 TB
+\docs,      45.67 MB
+\images,    234.56 GB
+```
+
+With `--top-level` option:
+```csv
+Folder Path, Size
+\,          7.91 TB
+\docs,      45.67 MB
+\images,    234.56 GB
+\data,      1.23 TB
+```
+Note: When using `--top-level`, only the root directory and its immediate subdirectories are included in the report.
 
 ## Build from Source (Windows)
 
